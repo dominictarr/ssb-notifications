@@ -41,12 +41,36 @@ unsubscribe everyone else too.
 
   }
 }
+```
+
+## alternate data structure
+
+a minimal permanent record of subscriptions, optimized to update easily.
+``` js
+{
+  <subscriptions>: {
+    <Notifier: thread|channel>: {
+      $seq: <max_seq>
+      <Subscriber: user|channel>: <seq>,
+    },
+    ...
+  },
+}
+```
+the `Notifier.$seq` is the latest update in that thread. If the `Notifier.Subscriber` is equal,
+that means they are up to date with that thread.
+To collect notifications, on a user query, iterate over all subscriptions for ones pertaining
+to that user. But cache this user in memory after that, so that updates are fast/instant.
+
+```
 
 ```
 
 ## License
 
 MIT
+
+
 
 
 
