@@ -50,6 +50,7 @@ tape('channel', function (t) {
       alice.add({
         type: 'post', text: 'test 1 2', channel: 'test'
       })(function (err, data) {
+        var _data = data
         if(err) throw err
         sbot.notifications.get(function (err, value) {
           t.equal(value['#test']._seq, data.timestamp, 'channel updated')
@@ -57,12 +58,14 @@ tape('channel', function (t) {
           sbot.notifications.get({source: bob.id}, function (err, value) {
             console.log('VALUE', value)
             var test_data = {}
-            test_data[data.key] = -data.timestamp
+            test_data[data.key] = data.timestamp
             t.deepEqual(value, {'#test': test_data})
-            sbot.notifications.get({source: '#test'}, function (err, value) {
-              console.log("TEST", value)
-              t.end()
-            })
+            console.log('_data', _data)
+            t.end()
+//            sbot.notifications.get({source: '#test'}, function (err, value) {
+//              console.log("TEST", value)
+//              t.end()
+//            })
           })
         })
       })
@@ -74,7 +77,4 @@ tape('close', function (t) {
   sbot.close()
   t.end()
 })
-
-
-
 
