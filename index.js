@@ -6,6 +6,10 @@ function isFunction (f) {
   return 'function' === typeof f
 }
 
+function isString(s) {
+  return 'string' === typeof s
+}
+
 exports.name = 'notifications'
 exports.version = require('./package.json').version
 exports.manifest = {
@@ -13,11 +17,11 @@ exports.manifest = {
 }
 
 function toTarget(s) {
-  return 'string' === typeof s ? s : s.link
+  return isString(s) ? s : !s ? null : s.link
 }
 
 function isChannel (s) {
-  return 'string' == typeof s && '#' === s[0]
+  return isString(s) && '#' === s[0]
 }
 
 function toMentions(a) {
@@ -32,11 +36,15 @@ function isRecent (ts) {
 //    return ts > Date.now() - THREE_MONTHS
 }
 
-function map (a, test) {
-  if(!a) return []
-  if('string' == typeof a && test(a)) return [a]
-  if(Array.isArray(a)) return a.map(toTarget).filter(test)
-  return []
+//function map (a, test) {
+//  if(!a) return []
+//  if('string' == typeof a && test(a)) return [a]
+//  if(Array.isArray(a)) return a.map(toTarget).filter(test)
+//  return []
+//}
+
+function map (a, fn) {
+  return !Array.isArray(a) ? [fn(a)] : a.map(fn)
 }
 
 function mapObject (o, fn) {
@@ -46,92 +54,73 @@ function mapObject (o, fn) {
   return _o
 }
 
+function toChannel (c) {
+  if(!isString(c)) return
+  if(c[0] === '#') return c
+  else return '#'+c
+}
+
 /*
   currently, this is coupled to several notification types.
 */
 
 exports.init = function (sbot, config) {
+  var notifications = {}
   var index =
-  sbot._flumeUse('notifications', Reduce(9, function (state, data) {
-    if(!state)
-      state = {
-        subscriptions: {}, notifications: {}
+  sbot._flumeUse('notifications', Reduce(10, function (state, data, seq) {
+    if(!state) state = {}
+
+    function subscribe (subscriber, key, seq) {
+      state[key] = state[key] || {}
+      state[key]._seq = seq //monotonic
+      state[key][subscriber] = seq
+    }
+
+    function subscribeOther(subscriber, key, seq) {
+      if(!subscriber) throw new Error('subscriber must be provided')
+      state[key] = state[key] || {}
+      state[key][subscriber] = state[key][subscriber] || -seq
+      if(!isFeed(subscriber)) {
+        state[subscriber] = state[subscriber] || {}
+        state[subscriber]._seq = seq
+        state[subscriber]._meta = true
       }
+    }
 
     var msg = data.value, key = data.key
-
-    function notify(user, id, value) {
-      if(!isRecent(value)) return
-      //unless they have explicitly left the room
-      if(!state.subscriptions[id] || state.subscriptions[id][user] !== false) {
-        state.notifications[user] = state.notifications[user] || {}
-        state.notifications[user][id] = state.notifications[user][id] ? Math.max(state.notifications[user][id], value) : value
-      }
-    }
-
-    //timeless is for if we want to always process the subscription.
-    //as with channel subscriptions.
-
-    //subcribe theads -> user
-    //         channel -> user
-    function subscribe (user, id, value, timeless) {
-      if(value != null) {
-        if(!isRecent(value) && !timeless) return
-        state.subscriptions[id] = state.subscriptions[id] || {}
-        state.subscriptions[id][user] = Math.min(value, state.subscriptions[id][user] || Infinity)
-      }
-      else if (state.subscriptions[id])
-        delete state.subscriptions[id][user]
-    }
 
     if(msg.content.text) {
       var root = msg.content.root
       if(root) {
-
-        var mentions = toMentions(msg.content.mentions)
-
-        if(mentions.length) {
-          mentions.forEach(function (mention) {
-            notify(mention, root, msg.timestamp)
-          })
-        } else {
-          //notify all who posted in this thead
-          for(var author in state.subscriptions[root]) {
-            notify(author, root, msg.timestamp)
-          }
-          if(msg.content.channel)
-            notify(msg.content.channel, root, msg.timestamp)
-          else if(msg.content.mentions) {
-            map(msg.content.mentions, isChannel).forEach(function (link) {
-              notify(link, root, msg.timestamp)
-            })
-            /* // notify backlinks?
-            map(msg.content.mentions, isMsg).forEach(function (e) {
-              notify(e, root, msg.timestamp)
-            })
-            */
-          }
-        }
-
-        //remove the author of this message, though, unless there is another notifying trigger
-        if(state.notifications[msg.author] < msg.timestamp)
-          notify(msg.author, root, null)
-
-        subscribe(msg.author, root, msg.content.unsubscribe === false ? null : msg.timestamp)
+        //when you post, subscribe, but mark this as acknowledged.
+        subscribe(msg.author, root, data.timestamp)
       }
       else {
-        subscribe(msg.author, key, msg.content.unsubscribe === false ? null : msg.timestamp)
-        //if this is a channel, then notify it.
-        if(msg.content.channel)
-          notify('#'+msg.content.channel, root, msg.timestamp)
+        //subscribe the OP
+        subscribe(msg.author, key, data.timestamp)
       }
+      if(isString(msg.content.channel)) {
+        subscribeOther(toChannel(msg.content.channel), key, data.timestamp)
+      }
+      map(msg.content.mentions, toTarget).forEach(function (mention) {
+        if(isFeed(mention) || isChannel(mention))
+          subscribeOther(mention, key, data.timestamp)
+      })
     }
-    //channel subscriptions
-    else if(msg.content.type === 'channel')
-      subscribe(msg.author, '#'+msg.content.channel, msg.content.subscribed === true ? msg.timestamp : null, true)
+    else if(msg.content.type === 'channel' && isString(msg.content.channel)) {
+      subscribe(msg.author, toChannel(msg.content.channel), data.timestamp)
+    }
+
+    //apply to any cached notifications.
+    for(var k in state[key])
+      if(notifications[k] && state[key][k]) {
+        if(notifications[k][key] == state[key]._seq)
+          delete notifications[k][key] //this thread has been acknowledged.
+        else
+          notifications[k][key] = state[key]._seq
+      }
 
     return state
-
   }))
 
   var _get = index.get
@@ -140,21 +129,28 @@ exports.init = function (sbot, config) {
 
     _get(function (err, state) {
       state = state || {}
-      //get notifications for this subscriber
-      if(opts.subscriber) {
-        cb(null, mapObject(state.notifications[opts.subscriber], function (key) {
-          if(state.notifications[key])
-            return state.notifications[key]
-          else return state.notifications[opts.subscriber][key]
-        }))
-      }
-      //get subscriptions for this notifier
-      else if(opts.notifier) {
-        cb(null, mapObject(state.subscriptions[opts.notifier], function (key) {
-          if(state.subscriptions[key])
-            return state.subscriptions[key]
-          else return state.subscriptions[opts.notifier][key]
-        }))
+      var source = opts.source
+      console.log('STATE', state)
+      if(source) {
+        var o = {}
+        for(var k in state) {
+          if(null != state[k][source] && state[k]._seq > state[k][source]) {
+            if(state[k]._meta) {
+              var p = o[k] = {}
+              for(var j in state) {
+                if(!o[j] &&
+                  null != state[j][k] && //channel k is subscribed to j
+                  state[j]._seq != state[k][source]
+                )
+                  p[j] = state[j]._seq //latest activity on thread
+              }
+            } else {
+              o[k] = state[k]._seq
+            }
+          }
+        }
+
+        return cb(null, o)
       }
       else
         cb(null, state)
@@ -165,4 +161,5 @@ exports.init = function (sbot, config) {
 
   return index
 }
+
 
