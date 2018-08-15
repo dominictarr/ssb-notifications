@@ -66,12 +66,21 @@ normal notifiers are just threads, they are only
 updated when there is a new message in that thread.
 but some notifiers are themselves subscribed to notifiers in turn.
 
+remaining thing to figure out: there are numbers for notifications.
+They currently show the (received) timestamp of the latest interaction.
+if someone else subscribes you, the timestamp should be ts-1,
+because that message is also a notification. if you subscribe yourself
+you are now consistent with that.
+
+you can also subscribe to a group/tag/channel. If you do that,
+when you request your notifications, it returns it as
+`{<thread>:<ts>,<channel>: {<thread>: <ts>}}` where ts is the latest
+activity time if greater than your last interaction in that thread.
+
+
+
 ## License
 
 MIT
-
-
-
-
 
 
